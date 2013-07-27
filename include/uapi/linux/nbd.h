@@ -43,6 +43,7 @@ enum {
 #define NBD_FLAG_SEND_FLUSH   (1 << 2) /* can flush writeback cache */
 /* there is a gap here to match userspace */
 #define NBD_FLAG_SEND_TRIM    (1 << 5) /* send trim/discard */
+#define NBD_FLAG_RESUME       (1 << 6) /* Resume connection */
 
 #define nbd_cmd(req) ((req)->cmd[0])
 
