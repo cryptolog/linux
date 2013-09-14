@@ -202,10 +202,12 @@ static int sock_xmit(struct nbd_device *nbd, int send, void *buf, int size,
 
 		if (signal_pending(current)) {
 			siginfo_t info;
+			int gotsig = dequeue_signal_lock(current, &current->blocked, &info);
 			printk(KERN_WARNING "nbd (pid %d: %s) got signal %d\n",
 				task_pid_nr(current), current->comm,
-				dequeue_signal_lock(current, &current->blocked, &info));
+				gotsig);
 			result = -EINTR;
+			if (gotsig) nbd->flags &= ~NBD_FLAG_RESUME;
 			sock_shutdown(nbd, !send);
 			break;
 		}
@@ -465,13 +467,21 @@ static void nbd_clear_que(struct nbd_device *nbd)
 		req = list_entry(nbd->waiting_queue.next, struct request,
 				 queuelist);
 		list_del_init(&req->queuelist);
-		req->errors++;
-		nbd_end_request(req);
+		if (nbd->flags & NBD_FLAG_RESUME) {
+			spin_lock_irq(&nbd->queue_lock);
+			list_add(&req->queuelist, &nbd->waiting_queue);
+			spin_unlock_irq(&nbd->queue_lock);
+			mutex_unlock(&nbd->tx_lock);
+			return 1;
+		} else {
+			req->errors++;
+			nbd_end_request(req);
+		}
 	}
 }
 
 
-static void nbd_handle_req(struct nbd_device *nbd, struct request *req)
+static int nbd_handle_req(struct nbd_device *nbd, struct request *req)
 {
 	if (req->cmd_type != REQ_TYPE_FS)
 		goto error_out;
@@ -498,7 +508,7 @@ static void nbd_handle_req(struct nbd_device *nbd, struct request *req)
 	req->errors = 0;
 
 	mutex_lock(&nbd->tx_lock);
-	if (unlikely(!nbd->sock)) {
+	if (unlikely(!nbd->sock) && ((nbd->flags & NBD_FLAG_RESUME) == 0)) {
 		mutex_unlock(&nbd->tx_lock);
 		dev_err(disk_to_dev(nbd->disk),
 			"Attempted send on closed socket\n");
@@ -521,11 +531,11 @@ static void nbd_handle_req(struct nbd_device *nbd, struct request *req)
 	mutex_unlock(&nbd->tx_lock);
 	wake_up_all(&nbd->active_wq);
 
-	return;
-
+	return 0;
 error_out:
 	req->errors++;
 	nbd_end_request(req);
+	return 1;
 }
 
 static int nbd_thread(void *data)
@@ -551,7 +561,8 @@ static int nbd_thread(void *data)
 		spin_unlock_irq(&nbd->queue_lock);
 
 		/* handle request */
-		nbd_handle_req(nbd, req);
+		if (nbd_handle_req(nbd, req))
+			return 0;
 	}
 	return 0;
 }
@@ -580,7 +591,7 @@ static void do_nbd_request(struct request_queue *q)
 
 		BUG_ON(nbd->magic != NBD_MAGIC);
 
-		if (unlikely(!nbd->sock)) {
+		if (unlikely((!nbd->sock) && ((nbd->flags & NBD_FLAG_RESUME) == 0))) {
 			dev_err(disk_to_dev(nbd->disk),
 				"Attempted send on closed socket\n");
 			req->errors++;
@@ -593,7 +604,8 @@ static void do_nbd_request(struct request_queue *q)
 		list_add_tail(&req->queuelist, &nbd->waiting_queue);
 		spin_unlock_irq(&nbd->queue_lock);
 
-		wake_up(&nbd->waiting_wq);
+		if (nbd->sock)
+			wake_up(&nbd->waiting_wq);
 
 		spin_lock_irq(q->queue_lock);
 	}
@@ -733,19 +745,32 @@ static int __nbd_ioctl(struct block_device *bdev, struct nbd_device *nbd,
 		sock_shutdown(nbd, 0);
 		file = nbd->file;
 		nbd->file = NULL;
-		nbd_clear_que(nbd);
-		dev_warn(disk_to_dev(nbd->disk), "queue cleared\n");
-		kill_bdev(bdev);
-		queue_flag_clear_unlocked(QUEUE_FLAG_DISCARD, nbd->disk->queue);
-		set_device_ro(bdev, false);
+		if ((nbd->flags & NBD_FLAG_RESUME) == 0) {
+			nbd_clear_que(nbd);
+			dev_warn(disk_to_dev(nbd->disk), "queue cleared\n");
+			kill_bdev(bdev);
+			queue_flag_clear_unlocked(QUEUE_FLAG_DISCARD, nbd->disk->queue);
+			set_device_ro(bdev, false);
+			nbd->flags = 0;
+			nbd->bytesize = 0;
+			bdev->bd_inode->i_size = 0;
+			set_capacity(nbd->disk, 0);
+			if (max_part > 0)
+				ioctl_by_bdev(bdev, BLKRRPART, 0);
+		} else {
+ 			struct request *req, *tmp;
+ 			int moved = 0;
+ 			spin_lock(&nbd->queue_lock);
+ 			list_for_each_entry_safe(req, tmp, &nbd->queue_head, queuelist) {
+ 				list_del_init(&req->queuelist);
+ 				list_add(&req->queuelist, &nbd->waiting_queue);
+ 				moved++;
+ 			}
+ 			spin_unlock(&nbd->queue_lock);
+ 			printk(KERN_WARNING "%s: retrying %d requests\n", nbd->disk->disk_name, moved);
+		}
 		if (file)
 			fput(file);
-		nbd->flags = 0;
-		nbd->bytesize = 0;
-		bdev->bd_inode->i_size = 0;
-		set_capacity(nbd->disk, 0);
-		if (max_part > 0)
-			ioctl_by_bdev(bdev, BLKRRPART, 0);
 		if (nbd->disconnect) /* user requested, ignore socket errors */
 			return 0;
 		return nbd->harderror;
