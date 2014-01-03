@@ -39,6 +39,7 @@
 #include "devices.h"
 #include "gpio-names.h"
 #include "baseband-xmm-power.h"
+#include <asm/mach-types.h>
 
 MODULE_LICENSE("GPL");
 
@@ -98,7 +99,7 @@ static bool modem_acked_resume;
 static spinlock_t xmm_lock;
 static DEFINE_MUTEX(xmm_onoff_mutex);
 static bool system_suspending;
-static struct regulator *enterprise_hsic_reg;
+static struct regulator *baseband_hsic_reg;
 static bool _hsic_reg_status;
 static struct pm_qos_request boost_cpu_freq_req;
 static struct delayed_work pm_qos_work;
@@ -116,22 +117,28 @@ static int tegra_baseband_rail_on(void)
 	struct board_info bi;
 	tegra_get_board_info(&bi);
 
-	/* only applicable to enterprise */
+	/* only applicable to enterprise and grouper */
 	if (bi.board_id != BOARD_E1197)
-		return 0;
+		if (!machine_is_grouper())
+			return 0;
 
 	if (_hsic_reg_status == true)
 		return 0;
 
-	if (enterprise_hsic_reg == NULL) {
-		enterprise_hsic_reg = regulator_get(NULL, "avdd_hsic");
-		if (IS_ERR_OR_NULL(enterprise_hsic_reg)) {
+	if (baseband_hsic_reg == NULL) {
+		if (bi.board_id == BOARD_E1197)
+			baseband_hsic_reg = regulator_get(NULL, "avdd_hsic");
+		else if (machine_is_grouper())
+			baseband_hsic_reg = regulator_get(NULL, "vddio_hsic");
+		if (IS_ERR_OR_NULL(baseband_hsic_reg)) {
 			pr_err("xmm: could not get regulator vddio_hsic\n");
-			enterprise_hsic_reg = NULL;
-			return PTR_ERR(enterprise_hsic_reg);
+			baseband_hsic_reg = NULL;
+			return PTR_ERR(baseband_hsic_reg);
 		}
+		if (machine_is_grouper())
+			regulator_set_voltage(baseband_hsic_reg, 1200000, 1200000);
 	}
-	ret = regulator_enable(enterprise_hsic_reg);
+	ret = regulator_enable(baseband_hsic_reg);
 	if (ret < 0) {
 		pr_err("xmm: failed to enable regulator\n");
 		return ret;
@@ -146,19 +153,20 @@ static int tegra_baseband_rail_off(void)
 	struct board_info bi;
 	tegra_get_board_info(&bi);
 
-	/* only applicable to enterprise */
+	/* only applicable to enterprise and grouper */
 	if (bi.board_id != BOARD_E1197)
-		return 0;
+		if (!machine_is_grouper())
+			return 0;
 
 	if (_hsic_reg_status == false)
 		return 0;
 
-	if (IS_ERR_OR_NULL(enterprise_hsic_reg)) {
+	if (IS_ERR_OR_NULL(baseband_hsic_reg)) {
 		pr_err("xmm: unbalanced disable on vddio_hsic regulator\n");
-		enterprise_hsic_reg = NULL;
-		return PTR_ERR(enterprise_hsic_reg);
+		baseband_hsic_reg = NULL;
+		return PTR_ERR(baseband_hsic_reg);
 	}
-	ret = regulator_disable(enterprise_hsic_reg);
+	ret = regulator_disable(baseband_hsic_reg);
 	if (ret < 0) {
 		pr_err("xmm: failed to disable regulator\n");
 		return ret;

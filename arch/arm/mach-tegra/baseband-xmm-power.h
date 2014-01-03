@@ -54,10 +54,16 @@ struct baseband_power_platform_data {
 		struct {
 			int bb_rst;
 			int bb_on;
+			int bb_vbat;
+			int bb_vbus;
+			int bb_sw_sel;
+			int sim_card_det;
+			int ipc_bb_rst_ind;
 			int ipc_bb_wake;
 			int ipc_ap_wake;
 			int ipc_hsic_active;
 			int ipc_hsic_sus_req;
+			int ipc_bb_force_crash;
 			struct platform_device *hsic_device;
 		} xmm;
 	} modem;
