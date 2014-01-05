@@ -352,7 +352,7 @@ CONFIG_TEGRA_PCI=y
 # Tegra board type
 #
 # CONFIG_MACH_ARUBA is not set
-# CONFIG_MACH_CARDHU is not set
+CONFIG_MACH_CARDHU=y
 # CONFIG_MACH_P1852 is not set
 # CONFIG_MACH_E1853 is not set
 # CONFIG_MACH_TEGRA_ENTERPRISE is not set
