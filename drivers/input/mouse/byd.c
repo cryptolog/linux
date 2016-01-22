@@ -38,7 +38,7 @@
 #define BYD_CMD_PAIR(c)		((1 << 12) | (c))
 #define BYD_CMD_PAIR_R(r,c)	((1 << 12) | (r << 8) | (c))
 
-#define DEBUG 1
+#define DEBUG 0
 
 struct byd_model_info {
 	char name[16];
