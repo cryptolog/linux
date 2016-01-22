@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2015, Tai Chi Minh Ralph Eastwood
  * Copyright (C) 2015, Martin Wimpress
+ * Copyright (C) 2015, Jay Kuri
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -37,6 +38,8 @@
 #define BYD_CMD_PAIR(c)		((1 << 12) | (c))
 #define BYD_CMD_PAIR_R(r,c)	((1 << 12) | (r << 8) | (c))
 
+#define DEBUG 1
+
 struct byd_model_info {
 	char name[16];
 	char id[BYD_MODEL_ID_LEN];
@@ -47,29 +50,31 @@ static struct byd_model_info byd_model_data[] = {
 };
 
 static const unsigned char byd_init_param[] = {
-	0xd3, 0x01,
-	0xd0, 0x00,
-	0xd0, 0x04,
-	0xd4, 0x01, 
-	0xd5, 0x01,
-	0xd7, 0x03,
-	0xd8, 0x04,
-	0xda, 0x03,
-	0xdb, 0x02,
-	0xe4, 0x05,
-	0xd6, 0x01,
-	0xde, 0x04,
-	0xe3, 0x01,
-	0xcf, 0x00,
-	0xd2, 0x03,
-	0xe5, 0x04,
-	0xd9, 0x02,
-	0xd9, 0x07,
-	0xdc, 0x03,
-	0xdd, 0x03,
-	0xdf, 0x03,
-	0xe1, 0x03,
-	0xd1, 0x00,
+
+	0xd3, 0x01,  // set right-handedness
+	0xd0, 0x00,  // reset button
+	0xd0, 0x06,  // send click in both corners as separate gestures
+	0xd4, 0x02,  // disable tapping.
+	0xd5, 0x03,  // tap and drag off
+	0xd7, 0x04,  // edge scrolling off
+	0xd8, 0x04,  // edge motion disabled
+	0xda, 0x04,  // slide speed fast
+	0xdb, 0x01,  // Edge motion off
+	0xe4, 0x05,  // Edge motion speed middle.
+	0xd6, 0x07,  // Touch Gesture Sensitivity high
+	0xde, 0x01,  // Palm detection low: seems to affect gesture detection
+	0xe3, 0x01,  // Enable gesture detection
+	0xcf, 0x00,  // Tap/Drag delay - off
+	0xd2, 0x03,  // Enable two-finger scrolling gesture in both directions
+	0xe5, 0x00,  // Two finger continue scrolling at edge - off
+	// 0xd9, 0x02,  // unknown - unnecessary?
+	// 0xd9, 0x07,  // unknown - unnecessary?
+	0xdc, 0x03,  // left edge width medium
+	0xdd, 0x03,  // top edge height medium
+	0xdf, 0x03,  // right edge height medium
+	0xe1, 0x03,  // bottom edge height medium
+	0xd1, 0x00,  // no 'absolute' position interleaving
+	// 0xe7, 0xe8,   // set scaling normal then double. (have to send be in pairs atm.)
 	0xce, 0x00,
 	0xcc, 0x00,
 	0xe0, 0x00
@@ -86,24 +91,26 @@ struct byd_ext_cmd {
 };
 
 static const struct byd_ext_cmd byd_ext_cmd_data[] = {
-	{ BYD_CMD_SCROLL_DEC, 0x28, REL_MISC    }, /* pinch out                 */
+	{ BYD_CMD_SCROLL_DEC, 0x28, REL_Z       }, /* pinch out                 */
 	{ BYD_CMD_GESTURE,    0x29, BTN_FORWARD }, /* rotate clockwise          */
 	{ BYD_CMD_SCROLL_INC, 0x2a, REL_HWHEEL  }, /* scroll right (two finger) */
 	{ BYD_CMD_SCROLL_DEC, 0x2b, REL_WHEEL   }, /* scroll down (two finger)  */
-	{ BYD_CMD_GESTURE,    0x2c, BTN_SIDE    }, /* swipe right               */
-	{ BYD_CMD_GESTURE,    0x2d, BTN_TASK    }, /* swipe down                */
-	{ BYD_CMD_GESTURE,    0x33, BTN_MOUSE+10}, /* four finger up            */
+	{ BYD_CMD_GESTURE,    0x2c, BTN_SIDE    }, /* 3-finger-swipe right      */
+	{ BYD_CMD_GESTURE,    0x2d, BTN_TASK    }, /* 3-finger-swipe down       */
+	{ BYD_CMD_GESTURE,    0x33, BTN_MOUSE+10}, /* four finger down          */
 	{ BYD_CMD_SCROLL_INC, 0x35, REL_HWHEEL  }, /* scroll right (region)     */
 	{ BYD_CMD_SCROLL_DEC, 0x36, REL_WHEEL,  }, /* scroll down (region)      */
-	{ BYD_CMD_GESTURE,    0xd3, BTN_MOUSE+8 }, /* swipe up                  */
-	{ BYD_CMD_GESTURE,    0xd4, BTN_EXTRA   }, /* swipe left                */
+	{ BYD_CMD_GESTURE,    0xd3, BTN_MOUSE+8 }, /* 3-finger-swipe up         */
+	{ BYD_CMD_GESTURE,    0xd4, BTN_EXTRA   }, /* 3-finger-swipe left       */
 	{ BYD_CMD_SCROLL_INC, 0xd5, REL_WHEEL   }, /* scroll up (two finger)    */
 	{ BYD_CMD_SCROLL_DEC, 0xd6, REL_HWHEEL  }, /* scroll left (two finger)  */
 	{ BYD_CMD_GESTURE,    0xd7, BTN_BACK    }, /* rotate anti-clockwise     */
-	{ BYD_CMD_SCROLL_INC, 0xd8, REL_MISC    }, /* pinch in                  */
+	{ BYD_CMD_SCROLL_INC, 0xd8, REL_RZ      }, /* pinch in                  */
 	{ BYD_CMD_SCROLL_INC, 0xca, REL_WHEEL   }, /* scroll up (region)        */
 	{ BYD_CMD_SCROLL_DEC, 0xcb, REL_HWHEEL  }, /* scroll left (region)      */
-	{ BYD_CMD_GESTURE,    0xcd, BTN_MOUSE+9 }, /* four finger down          */
+	{ BYD_CMD_GESTURE,    0xcd, BTN_MOUSE+9 }, /* four finger up            */
+	{ BYD_CMD_GESTURE,    0xd2, BTN_RIGHT   }, /* right corner click        */
+	{ BYD_CMD_GESTURE,    0x2e, BTN_LEFT    }, /* left corner click         */
 };
 
 struct byd_data {
@@ -234,6 +241,10 @@ int byd_init(struct psmouse *psmouse)
 		}
 	}
 
+	// set scaling to double - makes low-speed a bit more sane
+	psmouse->set_scale(psmouse, PSMOUSE_SCALE21);
+
+
 	/* build lookup table for extended commands */
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
@@ -336,6 +347,8 @@ int byd_detect(struct psmouse *psmouse, bool set_properties)
 		__set_bit(REL_WHEEL, psmouse->dev->relbit);
 		__set_bit(REL_HWHEEL, psmouse->dev->relbit);
 		__set_bit(REL_MISC, psmouse->dev->relbit);
+		__set_bit(REL_Z, psmouse->dev->relbit);
+		__set_bit(REL_RZ, psmouse->dev->relbit);
 
 		psmouse->vendor = "BYD";
 		psmouse->name = byd_model_data[i].name;
